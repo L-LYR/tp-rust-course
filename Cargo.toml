@@ -1,0 +1,13 @@
+[package]
+name = "kvs"
+version = "0.1.0"
+edition = "2021"
+authors = ["HammerLi <lisicen97@gmail.com>"]
+description = "A key-value store"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+assert_cmd = "2.0.2"
+predicates = "2.1.0"
+clap = "2.34.0"
