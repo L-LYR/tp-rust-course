@@ -1,2 +1,7 @@
+# cargo
 /target
 Cargo.lock
+# editor
+.vscode
+# temp file
+*.log
