@@ -128,7 +128,7 @@ impl KvStore {
 
     pub fn set(&mut self, key: String, value: String) -> Result<()> {
         let new_cmd = Command::set(key, value);
-        let meta = self.log.append(&new_cmd)?.unwrap();
+        let meta = self.log.append(&new_cmd)?.ok_or(KvsError::UnknownCommand)?;
         if let Command::Set { key, .. } = new_cmd {
             self.key_dir.insert(key, meta);
         }
@@ -166,7 +166,7 @@ impl KvStore {
             let new_cmd = Command::remove(key);
             self.log.append(&new_cmd)?;
             if let Command::Remove { key, .. } = new_cmd {
-                self.key_dir.remove(&key).expect("key not found");
+                self.key_dir.remove(&key);
             }
             self.key_dir.maybe_compact(&mut self.log)?;
             Ok(())
@@ -188,6 +188,7 @@ struct Log {
 }
 
 impl Log {
+    // append a command into the active log file
     fn append(&mut self, cmd: &Command) -> Result<Option<CommandMeta>> {
         let prev_pos = self.write_handle.pos;
         serde_json::to_writer(&mut self.write_handle, cmd)?;
@@ -207,12 +208,14 @@ impl Log {
         }
     }
 
+    // get the read handle of the given meta
     fn get_read_handle(&mut self, meta: &CommandMeta) -> Result<&mut ReadHandle<File>> {
         self.read_handles
             .get_mut(&meta.file_id)
             .ok_or(KvsError::LogFileNotFound)
     }
 
+    // get the raw command json string of the given meta
     fn get_raw_cmd(&mut self, meta: &CommandMeta) -> Result<String> {
         let handle = self.get_read_handle(meta)?;
         handle.seek(SeekFrom::Start(meta.position))?;
@@ -221,6 +224,7 @@ impl Log {
         Ok(buf)
     }
 
+    // get the value of the given meta
     fn get_value(&mut self, meta: &CommandMeta) -> Result<Option<String>> {
         if let Command::Set { value, .. } = serde_json::from_str(self.get_raw_cmd(meta)?.as_str())?
         {
@@ -230,6 +234,8 @@ impl Log {
         }
     }
 
+    // step means open a new active log file whose id is the previous id plus 2
+    // the skipped one is for compaction
     fn step_for_compaction(&mut self) -> Result<(u64, WriteHandle<File>)> {
         let compaction_id = self.active_file_id + 1;
         self.active_file_id += 2;
@@ -238,6 +244,7 @@ impl Log {
         Ok((compaction_id, compaction_writer))
     }
 
+    // remove all stale log files whose id is less than compaction log id
     fn remove_stale_log_files(&mut self, compaction_id: u64) -> Result<()> {
         let stale_file_ids: Vec<_> = self
             .read_handles
@@ -262,6 +269,7 @@ struct KeyDir {
 }
 
 impl KeyDir {
+    // load key-to-meta from log files into in-memory hashmap
     fn load_from(&mut self, id: &u64, read_handle: &mut ReadHandle<File>) -> Result<()> {
         let mut pos = read_handle.seek(SeekFrom::Start(0))?;
         let mut iter = Deserializer::from_reader(read_handle).into_iter::<Command>();
@@ -286,12 +294,14 @@ impl KeyDir {
         Ok(())
     }
 
+    // insert a (key, meta) pair
     fn insert(&mut self, key: String, meta: CommandMeta) {
         if let Some(old_meta) = self.key_to_meta.insert(key, meta) {
             self.uncompacted += old_meta.size;
         }
     }
 
+    // get the meta of the given key
     fn get(&self, key: &String) -> Option<&CommandMeta> {
         self.key_to_meta.get(key)
     }
@@ -302,9 +312,8 @@ impl KeyDir {
 
     fn remove(&mut self, key: &String) -> Option<CommandMeta> {
         let old_meta = self.key_to_meta.remove(key);
-        if old_meta.is_some() {
-            self.uncompacted += old_meta.as_ref().unwrap().size;
-        }
+        // add 'remove' command length
+        self.uncompacted += old_meta.as_ref().map_or(0, |meta| meta.size);
         old_meta
     }
 
