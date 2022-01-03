@@ -1,6 +1,5 @@
+pub use engines::{toy_bitcask, KvsEngine};
 pub use errors::{KvsError, Result};
-pub use kv::KvStore;
 
+mod engines;
 mod errors;
-mod kv;
-mod handle;
