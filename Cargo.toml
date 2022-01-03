@@ -10,7 +10,7 @@ description = "A key-value store"
 [dependencies]
 assert_cmd = "2.0.2"
 predicates = "2.1.0"
-clap = "2.34.0"
+clap = { version = "3.0.0", features = ["derive", "cargo"] }
 tempfile = "3.2.0"
 walkdir = "2.3.2"
 serde = { version = "1.0", features = ["derive"] }
