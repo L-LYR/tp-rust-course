@@ -1,5 +1,5 @@
 use clap::{App, AppSettings, Arg, SubCommand};
-use kvs::{toy_bitcask::KvStore, Result};
+use kvs::{toy_bitcask::KvStore, KvsEngine, Result};
 use std::{env::current_dir, process::exit};
 
 fn main() -> Result<()> {
