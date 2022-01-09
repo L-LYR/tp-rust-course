@@ -28,6 +28,9 @@ pub enum KvsError {
     #[fail(display = "Unknown engine type")]
     UnknownEngineType,
 
+    #[fail(display = "Imcompatible engin type")]
+    ImcompatibleEngineType,
+
     #[fail(display = "server error: {}", _0)]
     ServerErrorMessage(String),
 }

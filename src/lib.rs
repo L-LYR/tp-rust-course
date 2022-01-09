@@ -1,6 +1,6 @@
 pub use cli_common::{ClientOption, Command, EngineType, KvsCliOption, ServerOption};
 pub use client::KvsClient;
-pub use engines::{sled_wrapper::SledWrapper, toy_bitcask::KvStore, KvsEngine};
+pub use engines::{engine_type_of, sled_wrapper::SledWrapper, toy_bitcask::KvStore, KvsEngine};
 pub use errors::{KvsError, Result};
 pub use server::KvsServer;
 

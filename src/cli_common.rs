@@ -1,14 +1,23 @@
 use clap::{AppSettings, ArgEnum, Parser, Subcommand};
-use std::net::SocketAddr;
+use std::{fmt::Display, net::SocketAddr};
 
 const DEFAULT_LISTENING_ADDR: &str = "127.0.0.1:4000";
 const DEFAULT_KV_STORAGE_ENGINE: EngineType = EngineType::kvs;
 
 #[allow(non_camel_case_types)]
-#[derive(Debug, Copy, Clone, ArgEnum)]
+#[derive(Debug, Copy, Clone, ArgEnum, PartialEq, Eq)]
 pub enum EngineType {
     kvs,
     sled,
+}
+
+impl Display for EngineType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EngineType::kvs => f.write_str("kvs"),
+            EngineType::sled => f.write_str("sled"),
+        }
+    }
 }
 
 impl slog::Value for EngineType {
@@ -111,4 +120,3 @@ pub struct KvsCliOption {
     #[clap(subcommand)]
     pub command: Command,
 }
-

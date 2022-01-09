@@ -2,7 +2,9 @@ use std::env::current_dir;
 use std::process::exit;
 
 use clap::Parser;
-use kvs::{EngineType, KvStore, KvsServer, Result, ServerOption, SledWrapper};
+use kvs::{
+    engine_type_of, EngineType, KvStore, KvsError, KvsServer, Result, ServerOption, SledWrapper,
+};
 use slog::Logger;
 
 #[macro_use]
@@ -24,6 +26,17 @@ fn main() -> Result<()> {
 
 fn run(option: ServerOption, logger: Logger) -> Result<()> {
     let path = &current_dir()?;
+    if let Some(previous_engine_type) = engine_type_of(path)? {
+        if previous_engine_type != option.engine_type {
+            slog::error!(
+                logger,
+                "Imcompatible Engine Type, want {}, got {}",
+                previous_engine_type,
+                option.engine_type
+            );
+            return Err(KvsError::ImcompatibleEngineType);
+        }
+    }
     slog::info!(logger, "Server Start!";
         "server version" => env!("CARGO_PKG_VERSION"),
         "listening address" => option.addr,
@@ -33,13 +46,14 @@ fn run(option: ServerOption, logger: Logger) -> Result<()> {
     match option.engine_type {
         EngineType::kvs => {
             let engine = KvStore::open(path)?;
-            KvsServer::new(engine, logger).run(&option.addr)?;
+            KvsServer::new(engine, &logger).run(&option.addr)?;
         }
         EngineType::sled => {
             let engine = SledWrapper::new(sled::open(path)?);
-            KvsServer::new(engine, logger).run(&option.addr)?;
+            KvsServer::new(engine, &logger).run(&option.addr)?;
         }
     }
+    slog::info!(logger, "Server Done!");
     Ok(())
 }
 
