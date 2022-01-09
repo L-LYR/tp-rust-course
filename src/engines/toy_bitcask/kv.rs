@@ -1,6 +1,6 @@
 use crate::{
-    handle::{open, reader_of, writer_of, ReadHandle, WriteHandle},
-    KvsError, Result,
+    engines::toy_bitcask::handle::{open, reader_of, writer_of, ReadHandle, WriteHandle},
+    KvsEngine, KvsError, Result,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -118,7 +118,7 @@ fn list_log_file_in(dir: &Path) -> Result<Vec<u64>> {
         .collect())
 }
 
-impl KvStore {
+impl KvsEngine for KvStore {
     // The user invokes kvs set mykey myvalue
     // kvs creates a value representing the "set" command, containing its key and value
     // It then serializes that command to a String
@@ -126,7 +126,7 @@ impl KvStore {
     // If that succeeds, it exits silently with error code 0
     // If it fails, it exits by printing the error and returning a non-zero error code
 
-    pub fn set(&mut self, key: String, value: String) -> Result<()> {
+    fn set(&mut self, key: String, value: String) -> Result<()> {
         let new_cmd = Command::set(key, value);
         let meta = self.log.append(&new_cmd)?.ok_or(KvsError::UnknownCommand)?;
         if let Command::Set { key, .. } = new_cmd {
@@ -144,7 +144,7 @@ impl KvStore {
     // It deserializes the command to get the last recorded value of the key
     // It prints the value to stdout and exits with exit code 0
 
-    pub fn get(&mut self, key: String) -> Result<Option<String>> {
+    fn get(&mut self, key: String) -> Result<Option<String>> {
         if let Some(cmd_meta) = self.key_dir.get(&key) {
             self.log.get_value(cmd_meta)
         } else {
@@ -161,7 +161,7 @@ impl KvStore {
     // It then appends the serialized command to the log
     // If that succeeds, it exits silently with error code 0
 
-    pub fn remove(&mut self, key: String) -> Result<()> {
+    fn remove(&mut self, key: String) -> Result<()> {
         if self.key_dir.contains(&key) {
             let new_cmd = Command::remove(key);
             self.log.append(&new_cmd)?;

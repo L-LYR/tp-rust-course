@@ -1,8 +1,11 @@
-use clap::{App, AppSettings, Arg, SubCommand};
-use kvs::{KvStore, Result};
 use std::{env::current_dir, process::exit};
 
+use clap::Parser;
+use kvs::{Command, KvStore, KvsCliOption, KvsEngine, Result};
+
 fn main() -> Result<()> {
+    let cli = KvsCliOption::parse();
+
     // mathes for command line arguments
     // `kvs set <KEY> <VALUE>`
     // Set the value of a string key to a string
@@ -12,53 +15,13 @@ fn main() -> Result<()> {
     // Remove a given key
     // `kvs -V`
     // Print the version
-    let matches = App::new(env!("CARGO_PKG_NAME"))
-        .version(env!("CARGO_PKG_VERSION"))
-        .author(env!("CARGO_PKG_AUTHORS"))
-        .about(env!("CARGO_PKG_DESCRIPTION"))
-        .settings(&[
-            AppSettings::DisableHelpSubcommand,
-            AppSettings::SubcommandRequiredElseHelp,
-        ])
-        .subcommands(vec![
-            SubCommand::with_name("set")
-                .about("set a string key mapped to a string value")
-                .args(&[
-                    Arg::with_name("key")
-                        .help("key of the value that you want to set")
-                        .required(true),
-                    Arg::with_name("value")
-                        .help("value that you want to set")
-                        .required(true),
-                ]),
-            SubCommand::with_name("get")
-                .about("get the string value of a string key")
-                .arg(
-                    Arg::with_name("key")
-                        .help("key of the value that you want to get")
-                        .required(true),
-                ),
-            SubCommand::with_name("rm")
-                .about("remove a given string key")
-                .arg(
-                    Arg::with_name("key")
-                        .help("key of the value that you want to remove")
-                        .required(true),
-                ),
-        ])
-        .get_matches();
 
-    match matches.subcommand() {
-        ("set", Some(matches)) => {
-            let key = matches.value_of("key").unwrap();
-            let value = matches.value_of("value").unwrap();
-
+    match cli.command {
+        Command::set { key, value } => {
             let mut store = KvStore::open(current_dir()?)?;
             store.set(key.to_string(), value.to_string())?;
         }
-        ("get", Some(matches)) => {
-            let key = matches.value_of("key").unwrap();
-
+        Command::get { key } => {
             let mut store = KvStore::open(current_dir()?)?;
             if let Some(value) = store.get(key.to_string())? {
                 println!("{}", value)
@@ -66,9 +29,7 @@ fn main() -> Result<()> {
                 println!("Key not found")
             }
         }
-        ("rm", Some(matches)) => {
-            let key = matches.value_of("key").unwrap();
-
+        Command::rm { key } => {
             let mut store = KvStore::open(current_dir()?)?;
             match store.remove(key.to_string()) {
                 Ok(()) => {}
@@ -79,7 +40,6 @@ fn main() -> Result<()> {
                 Err(e) => return Err(e),
             }
         }
-        _ => unreachable!(),
     }
     Ok(())
 }
