@@ -21,6 +21,9 @@ pub enum KvsError {
 
     #[fail(display = "Unknown engine type")]
     UnknownEngineType,
+
+    #[fail(display = "{}", _0)]
+    ServerErrorMessage(String),
 }
 
 impl From<io::Error> for KvsError {
