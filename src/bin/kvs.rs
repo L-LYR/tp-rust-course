@@ -1,9 +1,10 @@
-use clap::Parser;
-use kvs::{cli_common, cli_common::Command, toy_bitcask::KvStore, KvsEngine, Result};
 use std::{env::current_dir, process::exit};
 
+use clap::Parser;
+use kvs::{Command, KvStore, KvsCliOption, KvsEngine, Result};
+
 fn main() -> Result<()> {
-    let cli = cli_common::KvsCliOption::parse();
+    let cli = KvsCliOption::parse();
 
     // mathes for command line arguments
     // `kvs set <KEY> <VALUE>`

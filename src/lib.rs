@@ -1,16 +1,12 @@
+pub use cli_common::{ClientOption, Command, EngineType, KvsCliOption, ServerOption};
 pub use client::KvsClient;
-pub use engines::{toy_bitcask, KvsEngine};
+pub use engines::{sled_wrapper::SledWrapper, toy_bitcask::KvStore, KvsEngine};
 pub use errors::{KvsError, Result};
+pub use server::KvsServer;
 
+mod cli_common;
+mod client;
 mod common;
 mod engines;
 mod errors;
-
-pub mod cli_common;
-pub mod client;
-pub mod server;
-
-#[macro_use]
-extern crate slog;
-extern crate slog_async;
-extern crate slog_term;
+mod server;

@@ -1,20 +1,21 @@
-use clap::Parser;
-use kvs::{cli_common, cli_common::Command, KvsClient, Result};
 use std::process::exit;
+
+use clap::Parser;
+use kvs::{ClientOption, Command, KvsClient, Result};
 
 fn main() -> Result<()> {
     // `kvs-client set <KEY> <VALUE> [--addr IP-PORT]`
     // `kvs-client get <KEY> [--addr IP-PORT]`
     // `kvs-client rm <KEY> [--addr IP-PORT]`
     // `kvs-client -V`
-    if let Err(e) = run(cli_common::ClientOption::parse()) {
+    if let Err(e) = run(ClientOption::parse()) {
         eprintln!("{}", e);
         exit(1);
     }
     Ok(())
 }
 
-fn run(opt: cli_common::ClientOption) -> Result<()> {
+fn run(opt: ClientOption) -> Result<()> {
     let mut client = KvsClient::connect(opt.addr)?;
     match opt.command {
         Command::get { key } => {

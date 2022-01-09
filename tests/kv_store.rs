@@ -1,4 +1,4 @@
-use kvs::{toy_bitcask::KvStore, KvsEngine, Result};
+use kvs::{KvStore, KvsEngine, Result};
 use tempfile::TempDir;
 use walkdir::WalkDir;
 

@@ -4,6 +4,12 @@ use sled::Db;
 #[derive(Clone)]
 pub struct SledWrapper(Db);
 
+impl SledWrapper {
+    pub fn new(db: Db) -> Self {
+        SledWrapper(db)
+    }
+}
+
 impl KvsEngine for SledWrapper {
     fn set(&mut self, key: String, value: String) -> Result<()> {
         self.0.insert(key.as_bytes(), value.as_bytes())?;

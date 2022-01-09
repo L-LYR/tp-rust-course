@@ -11,13 +11,17 @@ use crate::{
     KvsError::ServerErrorMessage,
     Result,
 };
+
 pub struct KvsClient {
     reader: Deserializer<IoRead<BufReader<TcpStream>>>,
     writer: BufWriter<TcpStream>,
 }
 
 impl KvsClient {
-    pub fn connect<T: ToSocketAddrs>(addr: T) -> Result<Self> {
+    pub fn connect<T>(addr: T) -> Result<Self>
+    where
+        T: ToSocketAddrs,
+    {
         let tcp_reader = TcpStream::connect(addr)?;
         let tcp_writer = tcp_reader.try_clone()?;
         Ok(KvsClient {
