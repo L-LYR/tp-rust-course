@@ -1,7 +1,7 @@
 use std::process::exit;
 
 use clap::Parser;
-use kvs::{ClientOption, Command, KvsClient, Result};
+use kvs::{ClientCommand, ClientOption, KvsClient, Result};
 
 fn main() -> Result<()> {
     // `kvs-client set <KEY> <VALUE> [--addr IP-PORT]`
@@ -16,20 +16,19 @@ fn main() -> Result<()> {
 }
 
 fn run(opt: ClientOption) -> Result<()> {
-    let mut client = KvsClient::connect(opt.addr)?;
     match opt.command {
-        Command::get { key } => {
-            if let Some(value) = client.get(key)? {
+        ClientCommand::get { key, addr } => {
+            if let Some(value) = KvsClient::connect(addr)?.get(key)? {
                 println!("{}", value);
             } else {
                 println!("Key not found");
             }
         }
-        Command::set { key, value } => {
-            client.set(key, value)?;
+        ClientCommand::set { key, value, addr } => {
+            KvsClient::connect(addr)?.set(key, value)?;
         }
-        Command::rm { key } => {
-            client.remove(key)?;
+        ClientCommand::rm { key, addr } => {
+            KvsClient::connect(addr)?.remove(key)?;
         }
     }
     Ok(())

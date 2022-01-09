@@ -89,6 +89,57 @@ pub struct ServerOption {
     pub engine_type: EngineType,
 }
 
+#[allow(non_camel_case_types)]
+#[derive(Subcommand, Clone, Debug)]
+pub enum ClientCommand {
+    /// Get the string value of a string key
+    #[clap(setting(AppSettings::ArgRequiredElseHelp))]
+    get {
+        /// Key of the value that you want to get
+        key: String,
+        #[clap(
+            long("addr"),
+            value_name("IP-PORT"),
+            default_value_t = DEFAULT_LISTENING_ADDR.parse().unwrap(),
+            parse(try_from_str),
+        )]
+        /// Target address of this command
+        addr: SocketAddr,
+    },
+
+    /// Set a string key mapped to a string value
+    #[clap(setting(AppSettings::ArgRequiredElseHelp))]
+    set {
+        /// Key of the value that you want to set
+        key: String,
+        /// Value that you want to set
+        value: String,
+        #[clap(
+            long("addr"),
+            value_name("IP-PORT"),
+            default_value_t = DEFAULT_LISTENING_ADDR.parse().unwrap(),
+            parse(try_from_str),
+        )]
+        /// Target address of this command
+        addr: SocketAddr,
+    },
+
+    /// Remove a key-value pair with the given string key
+    #[clap(setting(AppSettings::ArgRequiredElseHelp))]
+    rm {
+        /// Key of the value that you want to remove
+        key: String,
+        #[clap(
+            long("addr"),
+            value_name("IP-PORT"),
+            default_value_t = DEFAULT_LISTENING_ADDR.parse().unwrap(),
+            parse(try_from_str),
+        )]
+        /// Target address of this command
+        addr: SocketAddr,
+    },
+}
+
 #[derive(Debug, Parser)]
 #[clap(
     name("kvs-client"),
@@ -98,15 +149,7 @@ pub struct ServerOption {
 )]
 pub struct ClientOption {
     #[clap(subcommand)]
-    pub command: Command,
-    #[clap(
-        long("addr"),
-        value_name("IP-PORT"),
-        default_value_t = DEFAULT_LISTENING_ADDR.parse().unwrap(),
-        parse(try_from_str),
-    )]
-    /// Target address of kvs client
-    pub addr: SocketAddr,
+    pub command: ClientCommand,
 }
 
 #[derive(Debug, Parser)]
