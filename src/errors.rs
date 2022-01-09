@@ -18,6 +18,9 @@ pub enum KvsError {
 
     #[fail(display = "Log file not found")]
     LogFileNotFound,
+
+    #[fail(display = "Unknown engine type")]
+    UnknownEngineType,
 }
 
 impl From<io::Error> for KvsError {
