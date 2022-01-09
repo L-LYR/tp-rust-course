@@ -1,3 +1,4 @@
+pub mod sled_wrapper;
 pub mod toy_bitcask;
 
 use crate::Result;
