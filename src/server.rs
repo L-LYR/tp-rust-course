@@ -10,20 +10,19 @@ use crate::{
     KvsEngine, Result,
 };
 
-pub struct KvsServer<'a, E>
+pub struct KvsServer<E>
 where
     E: KvsEngine,
 {
     engine: E,
-    logger: &'a slog::Logger,
 }
 
-impl<'a, E> KvsServer<'a, E>
+impl<E> KvsServer<E>
 where
     E: KvsEngine,
 {
-    pub fn new(engine: E, logger: &'a slog::Logger) -> Self {
-        Self { engine, logger }
+    pub fn new(engine: E) -> Self {
+        Self { engine }
     }
 
     pub fn run<T>(&mut self, addr: &T) -> Result<()>
@@ -34,11 +33,11 @@ where
             match stream {
                 Ok(stream) => {
                     if let Err(e) = self.serve(stream) {
-                        slog::error!(self.logger, "Error when serving client: {}", e)
+                        error!("Error when serving client: {}", e)
                     }
                 }
                 Err(err) => {
-                    slog::error!(self.logger, "connection failed: {}", err);
+                    error!("connection failed: {}", err);
                 }
             }
         }
@@ -55,12 +54,7 @@ where
                 let resp = $resp;
                 serde_json::to_writer(&mut writer, &resp)?;
                 writer.flush()?;
-                slog::debug!(
-                    self.logger,
-                    "send response to {}, details: {:?}",
-                    client_addr,
-                    resp
-                );
+                debug!("send response to {}, details: {:?}", client_addr, resp);
             }};
         }
 
