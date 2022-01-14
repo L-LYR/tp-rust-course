@@ -3,7 +3,9 @@ use std::process::exit;
 
 use clap::Parser;
 use kvs::{
-    engine_type_of, EngineType, KvStore, KvsError, KvsServer, Result, ServerOption, SledWrapper,
+    engine_type_of, set_engine_type,
+    thread_pool::{RayonThreadPool, ThreadPool},
+    EngineType, KvStore, KvsError, KvsServer, Result, ServerOption, SledWrapper,
 };
 
 #[macro_use]
@@ -32,25 +34,32 @@ fn run(option: ServerOption) -> Result<()> {
     if let Some(previous_engine_type) = engine_type_of(path)? {
         if previous_engine_type != option.engine_type {
             error!(
-                "Imcompatible Engine Type, want {}, got {}",
+                "Imcompatible engine type, want {}, got {}",
                 previous_engine_type, option.engine_type
             );
             return Err(KvsError::ImcompatibleEngineType);
         }
     }
-    info!("Server Start!\nServer Version: {}, Listening Address: {}, Engine Type: {}, Serving Path: {}",
-        env!("CARGO_PKG_VERSION"), option.addr, option.engine_type, path.display());
+    set_engine_type(path, &option.engine_type)?;
+    let pool = RayonThreadPool::new(num_cpus::get())?;
+    info!(
+        "Server start!\nVersion: {}, Address: {}, type: {}, path: {}",
+        env!("CARGO_PKG_VERSION"),
+        option.addr,
+        option.engine_type,
+        path.display()
+    );
     match option.engine_type {
         EngineType::kvs => {
             let engine = KvStore::open(path)?;
-            KvsServer::new(engine).run(&option.addr)?;
+            KvsServer::new(engine, pool).run(&option.addr)?;
         }
         EngineType::sled => {
             let engine = SledWrapper::new(sled::open(path)?);
-            KvsServer::new(engine).run(&option.addr)?;
+            KvsServer::new(engine, pool).run(&option.addr)?;
         }
     }
-    info!("Server Done!");
+    info!("Server done!");
     Ok(())
 }
 

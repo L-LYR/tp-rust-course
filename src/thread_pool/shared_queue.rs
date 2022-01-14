@@ -1,6 +1,6 @@
 use std::thread;
 
-use crossbeam_channel::{self, Receiver, Sender};
+use crossbeam::channel::{Receiver, Sender};
 
 use super::ThreadPool;
 use crate::Result;
@@ -16,7 +16,7 @@ impl ThreadPool for SharedQueueThreadPool {
     where
         Self: Sized,
     {
-        let (s, r) = crossbeam_channel::unbounded();
+        let (s, r) = crossbeam::channel::unbounded();
 
         for _ in 0..n_thread {
             let worker = Worker {

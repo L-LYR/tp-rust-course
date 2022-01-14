@@ -3,14 +3,20 @@ use crate::{
     KvsEngine, KvsError, Result,
 };
 use chrono::Utc;
+use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Deserializer;
 use std::{
-    collections::HashMap,
+    cell::RefCell,
+    collections::BTreeMap,
     ffi::OsStr,
     fs::{self, File},
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
 };
 
 const COMPACTION_THRESHOLD: u64 = 1024 * 1024; // 1MB
@@ -44,56 +50,95 @@ impl Command {
     }
 }
 
-#[allow(dead_code)]
+#[derive(Debug)]
 pub(crate) struct CommandMeta {
-    pub file_id: u64,   // id of log file where command is saved
-    pub size: u64,      // size of command
-    pub position: u64,  // position of command in log file
-    pub timestamp: i64, // last modified timestamp
+    pub file_id: u64,  // id of log file where command is saved
+    pub position: u64, // position of command in log file
+    pub size: u64,     // size of command
 }
 
-impl From<(u64, u64, u64, i64)> for CommandMeta {
-    fn from((file_id, value_pos, value_size, timestamp): (u64, u64, u64, i64)) -> Self {
+impl From<(u64, u64, u64)> for CommandMeta {
+    fn from((file_id, value_pos, value_size): (u64, u64, u64)) -> Self {
         CommandMeta {
             file_id,
-            size: value_size,
             position: value_pos,
-            timestamp,
+            size: value_size,
         }
     }
 }
 
+#[allow(dead_code)]
+#[derive(Clone)]
 pub struct KvStore {
-    // log files
-    log: Log,
+    dir: Arc<PathBuf>,
     // key dir
-    key_dir: KeyDir,
+    key_dir: Arc<DashMap<String, CommandMeta>>,
+    // log
+    stable_log: StableLog,
+    // writer
+    active_log: Arc<Mutex<ActiveLog>>,
 }
 
 impl KvStore {
-    pub fn open<T: Into<PathBuf>>(dir: T) -> Result<KvStore> {
-        let dir: PathBuf = dir.into();
-        fs::create_dir_all(&dir)?;
-        let mut read_handles = HashMap::new();
-        let mut file_ids = list_log_file_in(&dir)?;
-        let mut key_dir = KeyDir::default();
-        file_ids.sort_unstable();
+    pub fn open<T>(dir: T) -> Result<KvStore>
+    where
+        T: Into<PathBuf>,
+    {
+        let dir = Arc::new(dir.into());
+        fs::create_dir_all(dir.as_ref())?;
+
+        let file_ids = list_log_file_in(&dir)?;
+        let key_dir: DashMap<String, CommandMeta> = DashMap::new();
+        let active_file_id = file_ids.last().unwrap_or(&0) + 1;
+        let mut read_handles = BTreeMap::new();
+        let (write_handle, read_handle) = open(&dir.join(log_file_of(active_file_id)))?;
+        read_handles.insert(active_file_id.clone(), read_handle);
+        let mut uncompacted = 0;
         for &id in &file_ids {
             let mut read_handle = reader_of(&dir.join(log_file_of(id)))?;
-            key_dir.load_from(&id, &mut read_handle)?;
+            let mut pos = read_handle.seek(SeekFrom::Start(0))?;
+            let mut iter = Deserializer::from_reader(&mut read_handle).into_iter::<Command>();
+            while let Some(cmd) = iter.next() {
+                let new_pos = iter.byte_offset() as u64;
+                match cmd? {
+                    Command::Set { key, .. } => {
+                        let meta = (id.clone(), pos, new_pos - pos).into();
+                        if let Some(old_meta) = key_dir.insert(key, meta) {
+                            uncompacted += old_meta.size;
+                        }
+                    }
+                    Command::Remove { key, .. } => {
+                        if let Some((_, old_meta)) = key_dir.remove(&key) {
+                            uncompacted += old_meta.size;
+                        }
+                        uncompacted += new_pos - pos; // add 'remove' cmd itself which will be compacted next time
+                    }
+                }
+                pos = new_pos;
+            }
             read_handles.insert(id, read_handle);
         }
-        let active_file_id = file_ids.last().unwrap_or(&0) + 1;
-        let (write_handle, read_handle) = open(&dir.join(log_file_of(active_file_id)))?;
-        read_handles.insert(active_file_id, read_handle);
+        let key_dir = Arc::new(key_dir);
+        let stable_log = StableLog {
+            dir: Arc::clone(&dir),
+            read_handles: RefCell::new(read_handles),
+            compacted_id: Arc::new(AtomicU64::new(0)),
+        };
+        let active_log = ActiveLog {
+            dir: Arc::clone(&dir),
+            file_id: active_file_id,
+            write_handle,
+            key_dir: Arc::clone(&key_dir),
+            uncompacted,
+            stable_log: stable_log.clone(),
+        };
+
+        // read_handles.insert(active_file_id, read_handle);
         Ok(KvStore {
-            log: Log {
-                dir,
-                active_file_id,
-                read_handles,
-                write_handle,
-            },
-            key_dir,
+            dir: Arc::clone(&dir),
+            key_dir: Arc::clone(&key_dir),
+            stable_log,
+            active_log: Arc::new(Mutex::new(active_log)),
         })
     }
 }
@@ -103,7 +148,7 @@ fn log_file_of(id: u64) -> String {
 }
 
 fn list_log_file_in(dir: &Path) -> Result<Vec<u64>> {
-    Ok(fs::read_dir(&dir)?
+    let mut log_file_ids: Vec<_> = fs::read_dir(&dir)?
         .flat_map(|entry| -> Result<PathBuf> { Ok(entry?.path()) })
         .filter(|file_path| -> bool {
             file_path.is_file() && file_path.extension() == Some("log".as_ref())
@@ -115,7 +160,11 @@ fn list_log_file_in(dir: &Path) -> Result<Vec<u64>> {
                 .map(|str| -> Option<u64> { str.trim_end_matches(".log").parse::<u64>().ok() })
         })
         .flatten()
-        .collect())
+        .collect();
+
+    log_file_ids.sort_unstable();
+
+    Ok(log_file_ids)
 }
 
 impl KvsEngine for KvStore {
@@ -126,14 +175,8 @@ impl KvsEngine for KvStore {
     // If that succeeds, it exits silently with error code 0
     // If it fails, it exits by printing the error and returning a non-zero error code
 
-    fn set(&mut self, key: String, value: String) -> Result<()> {
-        let new_cmd = Command::set(key, value);
-        let meta = self.log.append(&new_cmd)?.ok_or(KvsError::UnknownCommand)?;
-        if let Command::Set { key, .. } = new_cmd {
-            self.key_dir.insert(key, meta);
-        }
-        self.key_dir.maybe_compact(&mut self.log)?;
-        Ok(())
+    fn set(&self, key: String, value: String) -> Result<()> {
+        self.active_log.lock().unwrap().set(key, value)
     }
 
     // The user invokes kvs get mykey
@@ -144,9 +187,9 @@ impl KvsEngine for KvStore {
     // It deserializes the command to get the last recorded value of the key
     // It prints the value to stdout and exits with exit code 0
 
-    fn get(&mut self, key: String) -> Result<Option<String>> {
-        if let Some(cmd_meta) = self.key_dir.get(&key) {
-            self.log.get_value(cmd_meta)
+    fn get(&self, key: String) -> Result<Option<String>> {
+        if let Some(cmd_meta) = self.key_dir.get(&key).as_deref() {
+            self.stable_log.get_value(cmd_meta)
         } else {
             Ok(None)
         }
@@ -161,184 +204,164 @@ impl KvsEngine for KvStore {
     // It then appends the serialized command to the log
     // If that succeeds, it exits silently with error code 0
 
+    fn remove(&self, key: String) -> Result<()> {
+        self.active_log.lock().unwrap().remove(key)
+    }
+}
+
+struct ActiveLog {
+    // active log file id
+    pub file_id: u64,
+    // log directory
+    dir: Arc<PathBuf>,
+    // write handle of active log file
+    write_handle: WriteHandle<File>,
+    // in-memory key dir
+    key_dir: Arc<DashMap<String, CommandMeta>>,
+    // uncompacted log length
+    uncompacted: u64,
+    // stable log
+    stable_log: StableLog,
+}
+
+impl ActiveLog {
+    fn set(&mut self, key: String, value: String) -> Result<()> {
+        // write in active log file
+        let prev_pos = self.write_handle.pos;
+        let new_cmd = Command::set(key.clone(), value);
+        serde_json::to_writer(&mut self.write_handle, &new_cmd)?;
+        self.write_handle.flush()?;
+        // insert <key, meta> pair in keydir
+        let meta: CommandMeta = (self.file_id, prev_pos, self.write_handle.pos - prev_pos).into();
+        if let Some(old_meta) = self.key_dir.insert(key, meta) {
+            self.uncompacted += old_meta.size;
+        }
+        // compaction
+        if self.uncompacted >= COMPACTION_THRESHOLD {
+            self.compact()?;
+        }
+        Ok(())
+    }
+
     fn remove(&mut self, key: String) -> Result<()> {
-        if self.key_dir.contains(&key) {
-            let new_cmd = Command::remove(key);
-            self.log.append(&new_cmd)?;
-            if let Command::Remove { key, .. } = new_cmd {
-                self.key_dir.remove(&key);
+        // check
+        if self.key_dir.contains_key(&key) {
+            // write in active log file
+            let new_cmd = Command::remove(key.clone());
+            serde_json::to_writer(&mut self.write_handle, &new_cmd)?;
+            self.write_handle.flush()?;
+            // remove <key, meta> pair from keydir
+            if let Some((_, old_meta)) = self.key_dir.remove(&key) {
+                self.uncompacted += old_meta.size;
             }
-            self.key_dir.maybe_compact(&mut self.log)?;
+            // compaction
+            if self.uncompacted >= COMPACTION_THRESHOLD {
+                self.compact()?;
+            }
             Ok(())
         } else {
             Err(KvsError::KeyNotFound)
         }
     }
-}
 
-struct Log {
-    // directory
-    dir: PathBuf,
-    // id of current active log file
-    active_file_id: u64,
-    // file id -> reader handle
-    read_handles: HashMap<u64, ReadHandle<File>>,
-    // write handle of the current active log file
-    write_handle: WriteHandle<File>,
-}
+    fn compact(&mut self) -> Result<()> {
+        let compaction_id = self.file_id + 1;
+        self.file_id += 2;
+        self.write_handle = writer_of(&self.dir.join(log_file_of(self.file_id)))?;
+        let mut compaction_writer = writer_of(&self.dir.join(log_file_of(compaction_id)))?;
 
-impl Log {
-    // append a command into the active log file
-    fn append(&mut self, cmd: &Command) -> Result<Option<CommandMeta>> {
-        let prev_pos = self.write_handle.pos;
-        serde_json::to_writer(&mut self.write_handle, cmd)?;
-        self.write_handle.flush()?;
-        match cmd {
-            Command::Set { timestamp, .. } => Ok(Some(
-                (
-                    self.active_file_id,
-                    prev_pos,
-                    self.write_handle.pos - prev_pos,
-                    timestamp.to_owned(),
-                )
-                    .into(),
-            )),
-            Command::Remove { .. } => Ok(None),
-            // _ => Err(KvsError::UnknownCommand),
-        }
-    }
-
-    // get the read handle of the given meta
-    fn get_read_handle(&mut self, meta: &CommandMeta) -> Result<&mut ReadHandle<File>> {
-        self.read_handles
-            .get_mut(&meta.file_id)
-            .ok_or(KvsError::LogFileNotFound)
-    }
-
-    // get the raw command json string of the given meta
-    fn get_raw_cmd(&mut self, meta: &CommandMeta) -> Result<String> {
-        let handle = self.get_read_handle(meta)?;
-        handle.seek(SeekFrom::Start(meta.position))?;
-        let mut buf = String::new();
-        handle.take(meta.size).read_to_string(&mut buf)?;
-        Ok(buf)
-    }
-
-    // get the value of the given meta
-    fn get_value(&mut self, meta: &CommandMeta) -> Result<Option<String>> {
-        if let Command::Set { value, .. } = serde_json::from_str(self.get_raw_cmd(meta)?.as_str())?
-        {
-            Ok(Some(value))
-        } else {
-            Err(KvsError::UnknownCommand)
-        }
-    }
-
-    // step means open a new active log file whose id is the previous id plus 2
-    // the skipped one is for compaction
-    fn step_for_compaction(&mut self) -> Result<(u64, WriteHandle<File>)> {
-        let compaction_id = self.active_file_id + 1;
-        self.active_file_id += 2;
-        self.write_handle = writer_of(&self.dir.join(log_file_of(self.active_file_id)))?;
-        let compaction_writer = writer_of(&self.dir.join(log_file_of(compaction_id)))?;
-        Ok((compaction_id, compaction_writer))
-    }
-
-    // remove all stale log files whose id is less than compaction log id
-    fn remove_stale_log_files(&mut self, compaction_id: u64) -> Result<()> {
-        let stale_file_ids: Vec<_> = self
-            .read_handles
-            .keys()
-            .filter(|&&id| -> bool { id < compaction_id })
-            .cloned()
-            .collect();
-        for stale_file_id in stale_file_ids {
-            self.read_handles.remove(&stale_file_id);
-            fs::remove_file(self.dir.join(log_file_of(stale_file_id)))?;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Default)]
-struct KeyDir {
-    // in-memory key dir
-    key_to_meta: HashMap<String, CommandMeta>,
-    // uncompacted log length
-    uncompacted: u64,
-}
-
-impl KeyDir {
-    // load key-to-meta from log files into in-memory hashmap
-    fn load_from(&mut self, id: &u64, read_handle: &mut ReadHandle<File>) -> Result<()> {
-        let mut pos = read_handle.seek(SeekFrom::Start(0))?;
-        let mut iter = Deserializer::from_reader(read_handle).into_iter::<Command>();
-        while let Some(cmd) = iter.next() {
-            let new_pos = iter.byte_offset() as u64;
-            match cmd? {
-                Command::Set { key, .. } => {
-                    let meta = (id.clone(), pos, new_pos - pos, Utc::now().timestamp()).into();
-                    if let Some(old_meta) = self.key_to_meta.insert(key, meta) {
-                        self.uncompacted += old_meta.size;
-                    }
-                }
-                Command::Remove { key, .. } => {
-                    if let Some(old_meta) = self.key_to_meta.remove(&key) {
-                        self.uncompacted += old_meta.size;
-                    }
-                    self.uncompacted += new_pos - pos; // add 'remove' cmd itself which will be compacted next time
-                }
-            }
-            pos = new_pos;
-        }
-        Ok(())
-    }
-
-    // insert a (key, meta) pair
-    fn insert(&mut self, key: String, meta: CommandMeta) {
-        if let Some(old_meta) = self.key_to_meta.insert(key, meta) {
-            self.uncompacted += old_meta.size;
-        }
-    }
-
-    // get the meta of the given key
-    fn get(&self, key: &String) -> Option<&CommandMeta> {
-        self.key_to_meta.get(key)
-    }
-
-    fn contains(&self, key: &String) -> bool {
-        self.key_to_meta.contains_key(key)
-    }
-
-    fn remove(&mut self, key: &String) -> Option<CommandMeta> {
-        let old_meta = self.key_to_meta.remove(key);
-        // add 'remove' command length
-        self.uncompacted += old_meta.as_ref().map_or(0, |meta| meta.size);
-        old_meta
-    }
-
-    fn maybe_compact(&mut self, log: &mut Log) -> Result<()> {
-        if self.uncompacted > COMPACTION_THRESHOLD {
-            self.compact_into(log)?;
-        }
-        Ok(())
-    }
-
-    fn compact_into(&mut self, log: &mut Log) -> Result<()> {
-        let (compaction_id, mut compaction_writer) = log.step_for_compaction()?;
         let mut compacted_pos: u64 = 0;
-        for old_meta in self.key_to_meta.values_mut() {
-            let handle = log.get_read_handle(old_meta)?;
-            if handle.pos != old_meta.position {
-                handle.seek(SeekFrom::Start(old_meta.position))?;
-            }
-            let len = io::copy(&mut handle.take(old_meta.size), &mut compaction_writer)?;
-            *old_meta = (compaction_id, compacted_pos, len, Utc::now().timestamp()).into();
+        for mut entry in self.key_dir.iter_mut() {
+            let len = self.stable_log.locate_and(entry.value(), |mut handle| {
+                Ok(io::copy(&mut handle, &mut compaction_writer)?)
+            })?;
+            *entry = (compaction_id, compacted_pos, len).into();
+            // self.key_dir.insert(
+            //     entry.key().clone(),
+            //     (compaction_id, compacted_pos, len).into(),
+            // );
             compacted_pos += len;
         }
         compaction_writer.flush()?;
-        log.remove_stale_log_files(compaction_id)?;
+
+        self.stable_log
+            .compacted_id
+            .store(compaction_id, Ordering::SeqCst);
+        self.stable_log.remove_stale_log();
+
+        let stale_log_file_ids: Vec<_> = list_log_file_in(self.dir.as_ref())?
+            .into_iter()
+            .filter(|&id| -> bool { id < compaction_id })
+            .collect();
+
+        for id in stale_log_file_ids {
+            let log_file_path = self.dir.join(log_file_of(id));
+            if let Err(e) = fs::remove_file(&log_file_path) {
+                error!("{:?} cannot be removed, cause {}", log_file_path, e);
+            }
+        }
+
         self.uncompacted = 0;
         Ok(())
+    }
+}
+
+struct StableLog {
+    // directory
+    dir: Arc<PathBuf>,
+
+    // file id -> reader handle
+    // Because our log file name is in ascending order, here we use BTreeMap instead.
+    read_handles: RefCell<BTreeMap<u64, ReadHandle<File>>>,
+
+    // compacted
+    compacted_id: Arc<AtomicU64>,
+}
+
+impl StableLog {
+    // get the value of the given meta
+    fn get_value(&self, meta: &CommandMeta) -> Result<Option<String>> {
+        self.locate_and(meta, |handle| {
+            if let Command::Set { value, .. } = serde_json::from_reader(handle)? {
+                Ok(Some(value))
+            } else {
+                Err(KvsError::UnknownCommand)
+            }
+        })
+    }
+    fn locate_and<F, R>(&self, meta: &CommandMeta, f: F) -> Result<R>
+    where
+        F: FnOnce(io::Take<&mut ReadHandle<File>>) -> Result<R>,
+    {
+        self.remove_stale_log();
+        let mut read_handles = self.read_handles.borrow_mut();
+        if !read_handles.contains_key(&meta.file_id) {
+            let read_handle = reader_of(self.dir.join(log_file_of(meta.file_id)).as_path())?;
+            read_handles.insert(meta.file_id, read_handle);
+        }
+        let handle = read_handles
+            .get_mut(&meta.file_id)
+            .ok_or(KvsError::LogFileNotFound)?;
+        handle.seek(SeekFrom::Start(meta.position))?;
+        f(handle.take(meta.size))
+    }
+    fn remove_stale_log(&self) {
+        let mut read_handles = self.read_handles.borrow_mut();
+        while let Some(&id) = read_handles.keys().next() {
+            if id >= self.compacted_id.load(Ordering::SeqCst) {
+                break;
+            }
+            read_handles.remove(&id);
+        }
+    }
+}
+
+impl Clone for StableLog {
+    fn clone(&self) -> StableLog {
+        StableLog {
+            dir: Arc::clone(&self.dir),
+            compacted_id: Arc::clone(&self.compacted_id),
+            read_handles: RefCell::new(BTreeMap::new()),
+        }
     }
 }

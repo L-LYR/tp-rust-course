@@ -4,7 +4,7 @@ use std::sync::Arc;
 use kvs::thread_pool::*;
 use kvs::Result;
 
-use crossbeam_utils::sync::WaitGroup;
+use crossbeam::sync::WaitGroup;
 
 fn spawn_counter<P: ThreadPool>(pool: P) -> Result<()> {
     const TASK_NUM: usize = 20;
