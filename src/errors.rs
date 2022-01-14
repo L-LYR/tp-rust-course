@@ -1,4 +1,5 @@
 use failure::Fail;
+use rayon;
 use sled;
 use std::{io, string};
 
@@ -12,6 +13,9 @@ pub enum KvsError {
 
     #[fail(display = "serde error: {}", _0)]
     SerdeError(#[cause] serde_json::Error),
+
+    #[fail(display = "rayon error: {}", _0)]
+    RayonError(#[cause] rayon::ThreadPoolBuildError),
 
     #[fail(display = "encoding error: {}", _0)]
     EncodingError(#[cause] string::FromUtf8Error),
@@ -56,6 +60,12 @@ impl From<sled::Error> for KvsError {
 impl From<string::FromUtf8Error> for KvsError {
     fn from(err: string::FromUtf8Error) -> Self {
         KvsError::EncodingError(err)
+    }
+}
+
+impl From<rayon::ThreadPoolBuildError> for KvsError {
+    fn from(err: rayon::ThreadPoolBuildError) -> Self {
+        KvsError::RayonError(err)
     }
 }
 

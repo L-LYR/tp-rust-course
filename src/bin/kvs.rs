@@ -18,11 +18,11 @@ fn main() -> Result<()> {
 
     match cli.command {
         Command::set { key, value } => {
-            let mut store = KvStore::open(current_dir()?)?;
+            let store = KvStore::open(current_dir()?)?;
             store.set(key.to_string(), value.to_string())?;
         }
         Command::get { key } => {
-            let mut store = KvStore::open(current_dir()?)?;
+            let store = KvStore::open(current_dir()?)?;
             if let Some(value) = store.get(key.to_string())? {
                 println!("{}", value)
             } else {
@@ -30,7 +30,7 @@ fn main() -> Result<()> {
             }
         }
         Command::rm { key } => {
-            let mut store = KvStore::open(current_dir()?)?;
+            let store = KvStore::open(current_dir()?)?;
             match store.remove(key.to_string()) {
                 Ok(()) => {}
                 Err(kvs::KvsError::KeyNotFound) => {
