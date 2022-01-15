@@ -9,3 +9,5 @@
 - [Project4](https://github.com/pingcap/talent-plan/blob/master/courses/rust/projects/project-4/README.md) [Solution](https://github.com/L-LYR/tp-rust-course/tree/project4)
 
 - [Project5](https://github.com/pingcap/talent-plan/blob/master/courses/rust/projects/project-5/README.md) [Solution](https://github.com/L-LYR/tp-rust-course/tree/project5)
+
+Project5 is only outlined. Waiting for a satisfactory ending. Learn [tokio](https://crates.io/crates/tokio) instead.
